@@ -3,6 +3,7 @@ import importlib
 import itertools
 import logging
 import os
+import sys
 import random
 
 import pygame
@@ -18,7 +19,7 @@ from arkanoid.utils.util import (load_high_score,
                                  load_png,
                                  load_png_sequence,
                                  save_high_score)
-from arkanoid.utils import ptext
+from arkanoid.utils import ptext, joy
 
 LOG = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ TOP_OFFSET = 150
 # The title of the main window.
 DISPLAY_CAPTION = 'Arkanoid'
 # The angle the ball initially moves off the paddle, in radians.
-BALL_START_ANGLE_RAD = 5.0  # Value must be no smaller than -3.14
+BALL_START_ANGLE_RAD = 5.5  # Value must be no smaller than -3.14
 # The speed that the ball will always try to arrive at.
 # This is based on a game running at 60fps. You might need to increment it by
 # a couple of notches if you find the ball moves too slowly.
@@ -40,7 +41,7 @@ BALL_BASE_SPEED = 8  # pixels per frame
 # collisions.
 BALL_TOP_SPEED = 15  # pixels per frame
 # Per-frame rate at which ball is brought back to base speed.
-BALL_SPEED_NORMALISATION_RATE = 0.02
+BALL_SPEED_NORMALISATION_RATE = 0.05
 # Increase in speed caused by colliding with a brick.
 BRICK_SPEED_ADJUST = 0.5
 # Increase in speed caused by colliding with a wall.
@@ -55,6 +56,7 @@ ALT_FONT = os.path.join(os.path.dirname(__file__), 'data', 'fonts',
 
 # Initialise the pygame modules.
 pygame.init()
+os.environ['SDL_VIDEO_WINDOW_POS'] = "0, 50"
 
 
 class Arkanoid:
@@ -64,6 +66,11 @@ class Arkanoid:
         # Initialise the clock.
         self._clock = pygame.time.Clock()
 
+        # Initialise joystick.
+        pygame.joystick.init()
+        self._joystick = pygame.joystick.Joystick(0)
+        self._joystick.init()
+
         # Create the main screen (the window) and default background.
         self._screen = self._create_screen()
         self._background = self._create_background()
@@ -72,7 +79,7 @@ class Arkanoid:
         self._high_score = load_high_score()
 
         # The start screen displayed before the game is started.
-        self._start_screen = StartScreen(self._start_game)
+        self._start_screen = StartScreen(self._start_game, self._joystick)
 
         # Reference to a running game, when one is in play.
         self._game = None
@@ -87,6 +94,7 @@ class Arkanoid:
 
         # Initialise the scores.
         self._display_player_score = functools.partial(self._display_score,
+                  
                                                        y=35)
         self._display_high_score = functools.partial(self._display_score,
                                                      y=100)
@@ -124,6 +132,11 @@ class Arkanoid:
 
         LOG.debug('Exiting')
 
+    @classmethod
+    def _close_game(cls):
+        pygame.quit()
+        sys.exit()
+
     def _start_game(self, round_no):
         """Callback invoked by the start screen when a user begins a game,
         either by hitting the spacebar, or by entering a specific round number
@@ -141,11 +154,14 @@ class Arkanoid:
         except (ImportError, AttributeError):
             LOG.exception('Unable to import round')
         else:
-            self._game = Game(round_class=round_cls)
+            self._game = Game(round_class=round_cls, joystick=self._joystick)
             self._start_screen.hide()
 
     def _create_screen(self):
-        pygame.display.set_mode(DISPLAY_SIZE)
+        pygame.display.set_mode(
+            DISPLAY_SIZE, 
+            pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
+        )
         pygame.display.set_caption(DISPLAY_CAPTION)
         pygame.mouse.set_visible(False)
         screen = pygame.display.get_surface()
@@ -193,7 +209,7 @@ class StartScreen:
     start a game, and which level to start on.
     """
 
-    def __init__(self, on_start):
+    def __init__(self, on_start, joystick):
         """Initialise the start screen.
 
         Args:
@@ -204,6 +220,8 @@ class StartScreen:
         """
         self._on_start = on_start
         self._screen = pygame.display.get_surface()
+
+        self.joystick = joystick
 
         # Whether we've reinitialised the screen.
         self._init = False
@@ -256,6 +274,7 @@ class StartScreen:
         """
         if not self._registered:
             receiver.register_handler(pygame.KEYUP, self._on_keyup)
+            receiver.register_handler(pygame.JOYBUTTONDOWN, self._on_joybuttondown)
             self._registered = True
 
         if not self._init:
@@ -292,7 +311,7 @@ class StartScreen:
             self._text_color_1 = next(self._text_colors_1)
             self._text_color_2 = next(self._text_colors_2)
 
-        ptext.draw('SPACEBAR TO START', (50, 500),
+        ptext.draw('PRESS START TO BEGIN', (50, 500),
                    fontname=ALT_FONT,
                    fontsize=48,
                    color=self._text_color_1,
@@ -322,6 +341,7 @@ class StartScreen:
     def hide(self):
         """Hide the start screen and unregister event listeners."""
         receiver.unregister_handler(self._on_keyup)
+        receiver.unregister_handler(self._on_joybuttondown)
         self._registered = False
         self._init = False
 
@@ -348,6 +368,12 @@ class StartScreen:
             self._screen.blit(pygame.Surface((50, 50)), self._user_input_pos)
             self._on_start(int(self._user_input))
             self._user_input = ''
+        elif event.key == pygame.K_ESCAPE:
+            Arkanoid._close_game()
+
+    def _on_joybuttondown(self, event):
+        if event.button == joy.JOYSTICK_START:
+            self._on_start(1)
 
 
 class Game:
@@ -356,7 +382,7 @@ class Game:
     An instance of a Game comes into being when a player starts a new game.
     """
 
-    def __init__(self, round_class=Round1, lives=3):
+    def __init__(self, round_class=Round1, lives=30, joystick=None):
         """Initialise a new Game.
 
         Args:
@@ -368,6 +394,8 @@ class Game:
         # Keep track of the score and lives throughout the game.
         self.lives = lives
         self.score = 0
+
+        self.joystick = joystick
 
         # Reference to the main screen.
         self._screen = pygame.display.get_surface()
@@ -601,23 +629,31 @@ class Game:
         """Create the event handlers for paddle movement."""
         keys_down = 0
 
+        def stop_game(event):
+            if event.key == pygame.K_ESCAPE:
+                Arkanoid._close_game()
+        self.handler_stop_game = stop_game
+
         def move_left(event):
             nonlocal keys_down
-            if event.key == pygame.K_LEFT:
+            if (hasattr(event, 'key') and event.key == pygame.K_LEFT or 
+                hasattr(event, 'axis') and (event.axis, round(event.value)) == joy.JOYSTICK_LEFT):
                 self.paddle.move_left()
                 keys_down += 1
         self.handler_move_left = move_left
 
         def move_right(event):
             nonlocal keys_down
-            if event.key == pygame.K_RIGHT:
+            if (hasattr(event, 'key') and event.key == pygame.K_RIGHT or 
+                hasattr(event, 'axis') and (event.axis, round(event.value)) == joy.JOYSTICK_RIGHT):
                 self.paddle.move_right()
                 keys_down += 1
         self.handler_move_right = move_right
 
         def stop(event):
             nonlocal keys_down
-            if event.key == pygame.K_LEFT or event.key == pygame.K_RIGHT:
+            if (hasattr(event, 'key') and (event.key == pygame.K_LEFT or event.key == pygame.K_RIGHT) or 
+                hasattr(event, 'axis') and (event.axis, round(event.value)) == joy.JOYSTICK_NEUTRAL):
                 if keys_down > 0:
                     keys_down -= 1
                 if keys_down == 0:
@@ -685,8 +721,12 @@ class GameStartState(BaseState):
         # Register the event handlers for paddle control.
         receiver.register_handler(pygame.KEYDOWN,
                                   self.game.handler_move_left,
-                                  self.game.handler_move_right)
+                                  self.game.handler_move_right,
+                                  self.game.handler_stop_game)
         receiver.register_handler(pygame.KEYUP, self.game.handler_stop)
+        receiver.register_handler(pygame.JOYAXISMOTION,
+                                  self.game.handler_move_left,
+                                  self.game.handler_move_right, self.game.handler_stop)
 
     def update(self):
         # TODO: implement the game intro sequence (animation).

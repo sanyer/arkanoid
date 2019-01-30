@@ -9,6 +9,7 @@ from arkanoid.sprites.paddle import (LaserState,
                                      NormalState,
                                      WideState)
 from arkanoid.utils.util import load_png_sequence
+from arkanoid.utils import joy
 
 LOG = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class PowerUp(pygame.sprite.Sprite):
         """
         super().__init__()
         self.game = game
+        self.joystick = self.game.joystick
         self._speed = speed
         self._animation = itertools.cycle(
             image for image, _ in load_png_sequence(png_prefix))
@@ -250,6 +252,7 @@ class CatchPowerUp(PowerUp):
 
         # Monitor for spacebar presses to release a caught ball.
         receiver.register_handler(pygame.KEYUP, self._release_ball)
+        receiver.register_handler(pygame.JOYBUTTONDOWN, self._release_ball)
 
     def deactivate(self):
         """Deactivate the CatchPowerUp from preventing the paddle from
@@ -262,7 +265,8 @@ class CatchPowerUp(PowerUp):
 
     def _release_ball(self, event):
         """Release a caught ball when the spacebar is pressed."""
-        if event.key == pygame.K_SPACE:
+        if (hasattr(event, 'key') and event.key == pygame.K_SPACE or 
+            hasattr(event, 'button') and event.button == joy.JOYSTICK_A):
             for ball in self.game.balls:
                 ball.release()
 

@@ -7,6 +7,7 @@ import pygame
 from arkanoid.event import receiver
 from arkanoid.utils.util import (load_png,
                                  load_png_sequence)
+from arkanoid.utils import joy
 
 LOG = logging.getLogger(__name__)
 
@@ -441,6 +442,7 @@ class LaserState(PaddleState):
     def __init__(self, paddle, game):
         super().__init__(paddle)
         self._game = game
+        self.joystick = self._game.joystick
 
         # Load the images/rects for converting to a laser paddle.
         self._image_sequence = load_png_sequence('paddle_laser')
@@ -479,6 +481,7 @@ class LaserState(PaddleState):
             self._to_laser = False
             # Start monitoring for spacebar presses for firing bullets.
             receiver.register_handler(pygame.KEYUP, self._fire)
+            receiver.register_handler(pygame.JOYBUTTONDOWN, self._fire)
 
     def _convert_from_laser(self):
         try:
@@ -521,7 +524,8 @@ class LaserState(PaddleState):
         """Event handler that fires bullets from the paddle when the 
         spacebar is pressed.
         """
-        if event.key == pygame.K_SPACE:
+        if (hasattr(event, 'key') and event.key == pygame.K_SPACE or 
+            hasattr(event, 'button') and event.button == joy.JOYSTICK_A):
             self._bullets = [bullet for bullet in self._bullets if
                              bullet.visible]
             # Fire the bullets, only allowing max 4 in the air at once.
